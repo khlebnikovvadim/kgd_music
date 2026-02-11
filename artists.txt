@@ -1,0 +1,3 @@
+# List of artist URLs to track (one per line)
+# Add your artists here:
+https://music.yandex.ru/artist/7927866
