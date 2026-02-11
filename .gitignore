@@ -16,7 +16,7 @@ env/
 # OS
 .DS_Store
 
-# Data files (uncomment to not track data in git)
-# data/*.db
-# data/*.csv
-# data/*.log
+# Data files (runtime data should not be tracked)
+data/*.db
+data/*.csv
+data/*.log

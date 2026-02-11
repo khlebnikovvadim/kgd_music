@@ -253,9 +253,9 @@ class YandexMusicParser:
                         browser.close()
                         return None
 
-                    # Pattern: "X слушателей за месяц" or "X тыс./млн слушателей"
+                    # Pattern: "X слушателей за/в месяц" or "X тыс./млн слушателей"
                     patterns = [
-                        r'([\d\s]+)\s*слушател[^\d]*за\s*месяц',  # "5 260 слушателей за месяц"
+                        r'([\d\s]+)\s*слушател[^\d]*(?:за|в)\s*месяц',  # "5 260 слушателей за/в месяц"
                         r'([\d,.]+)\s*(тыс|млн)\.?\s*слушател',  # "5.2 тыс слушателей"
                     ]
 
@@ -263,7 +263,8 @@ class YandexMusicParser:
                         matches = re.finditer(pattern, visible_text, re.IGNORECASE)
                         for match in matches:
                             try:
-                                number_str = match.group(1).replace(' ', '').replace(',', '.')
+                                # Remove all whitespace (including non-breaking spaces \xa0)
+                                number_str = match.group(1).replace(' ', '').replace('\xa0', '').replace(',', '.')
                                 number = float(number_str)
 
                                 # Handle multipliers

@@ -201,6 +201,7 @@ kgd_music/
 ├── run_monthly.py     # Monthly execution script
 ├── artists.txt        # List of artist URLs to track
 ├── test_proxy.py      # Test proxy connectivity
+├── debug_page.py      # Debug tool to inspect page content
 ├── requirements.txt   # Python dependencies
 ├── README.md          # This file
 └── data/
@@ -216,7 +217,7 @@ kgd_music/
 3. **Navigates to artist page**
 4. **Waits for JavaScript** to render content
 5. **Simulates human behavior** (scrolling, delays)
-6. **Extracts listener count** from text "X слушателей за месяц"
+6. **Extracts listener count** from text "X слушателей за/в месяц" (handles both variants)
 7. **Saves to database**
 
 ## For Non-Russian Users
