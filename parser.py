@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
 Yandex Music Artist Statistics Parser
-Parses artist pages to track monthly listener counts
+Uses Playwright for JavaScript rendering
 """
 
-import requests
-import json
-import re
 import pandas as pd
 import sqlite3
 from datetime import datetime
 import time
 import logging
+import re
 from pathlib import Path
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 # Setup logging
 logging.basicConfig(
@@ -23,16 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class YandexMusicParser:
-    """Parser for Yandex Music artist statistics"""
+    """Parser for Yandex Music artist statistics using Playwright"""
 
-    def __init__(self, db_path='data/artists.db'):
+    def __init__(self, db_path='data/artists.db', headless=True):
         self.db_path = db_path
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-        })
+        self.headless = headless
         self._init_database()
 
     def _init_database(self):
@@ -57,36 +51,9 @@ class YandexMusicParser:
             conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
 
-    def _extract_json_data(self, html_content):
-        """
-        Extract JSON data from Yandex Music page
-
-        The page contains embedded JSON in format:
-        Mu.pages.artist = {"artist": {...}, ...}
-        """
-        # Look for the artist data in the page
-        patterns = [
-            r'Mu\.pages\.artist\s*=\s*({.+?});',
-            r'window\.__INITIAL_STATE__\s*=\s*({.+?});',
-            r'window\.__DATA__\s*=\s*({.+?});',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, html_content, re.DOTALL)
-            if match:
-                try:
-                    json_str = match.group(1)
-                    data = json.loads(json_str)
-                    return data
-                except json.JSONDecodeError as e:
-                    logger.debug(f"JSON decode error with pattern {pattern}: {e}")
-                    continue
-
-        return None
-
     def parse_artist_page(self, artist_url):
         """
-        Parse artist page and extract statistics
+        Parse artist page using Playwright (with JavaScript rendering)
 
         Args:
             artist_url: URL like 'https://music.yandex.ru/artist/7927866'
@@ -102,53 +69,112 @@ class YandexMusicParser:
                 return None
             artist_id = artist_id_match.group(1)
 
-            # Fetch page
             logger.info(f"Fetching {artist_url}")
-            response = self.session.get(artist_url, timeout=15)
-            response.raise_for_status()
 
-            # Extract JSON data from page
-            data = self._extract_json_data(response.text)
+            with sync_playwright() as p:
+                # Launch browser
+                browser = p.chromium.launch(headless=self.headless)
+                context = browser.new_context(
+                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    locale='ru-RU'
+                )
+                page = context.new_page()
 
-            if not data:
-                logger.error(f"Could not find JSON data in page")
-                return None
+                # Navigate to page
+                try:
+                    page.goto(artist_url, wait_until='networkidle', timeout=30000)
+                except PlaywrightTimeout:
+                    logger.warning("Page load timeout, continuing anyway...")
 
-            # Navigate JSON structure
-            # Expected structure: data["artist"]["meta"]
-            artist_info = None
-            artist_name = None
-            listeners = None
+                # Wait a bit for JavaScript to execute
+                page.wait_for_timeout(3000)
 
-            # Try different JSON paths
-            if 'artist' in data:
-                artist_section = data['artist']
+                # Extract artist name
+                artist_name = None
+                try:
+                    # Try different selectors for artist name
+                    name_selectors = [
+                        'h1.page-artist__title',
+                        '[class*="ArtistTitle"]',
+                        'h1',
+                    ]
+                    for selector in name_selectors:
+                        try:
+                            element = page.query_selector(selector)
+                            if element:
+                                artist_name = element.inner_text().strip()
+                                if artist_name:
+                                    break
+                        except:
+                            pass
+                except Exception as e:
+                    logger.debug(f"Could not extract artist name: {e}")
 
-                # Get artist ID and name
-                if 'meta' in artist_section:
-                    meta = artist_section['meta']
+                # Extract listeners count
+                listeners = None
+                try:
+                    # Look for text like "5 260 слушателей за месяц" or "5.2 тыс слушателей"
+                    page_text = page.content()
 
-                    # Artist name
-                    if 'artist' in meta and 'name' in meta['artist']:
-                        artist_name = meta['artist']['name']
+                    # Method 1: Search in visible text
+                    visible_text = page.inner_text('body')
 
-                    # Last month listeners
-                    if 'lastMonthListeners' in meta:
-                        listeners = meta['lastMonthListeners']
+                    # Pattern: "X слушателей за месяц" or "X тыс./млн слушателей"
+                    patterns = [
+                        r'([\d\s]+)\s*слушател',  # "5 260 слушателей"
+                        r'([\d,.]+)\s*(тыс|млн)\.?\s*слушател',  # "5.2 тыс слушателей"
+                    ]
 
-                # Alternative: artist info at top level
-                if not artist_name and 'name' in artist_section:
-                    artist_name = artist_section['name']
+                    for pattern in patterns:
+                        matches = re.finditer(pattern, visible_text, re.IGNORECASE)
+                        for match in matches:
+                            try:
+                                number_str = match.group(1).replace(' ', '').replace(',', '.')
+                                number = float(number_str)
 
-                if not listeners and 'lastMonthListeners' in artist_section:
-                    listeners = artist_section['lastMonthListeners']
+                                # Handle multipliers
+                                if len(match.groups()) > 1:
+                                    multiplier = match.group(2)
+                                    if multiplier == 'тыс':
+                                        number *= 1000
+                                    elif multiplier == 'млн':
+                                        number *= 1_000_000
+
+                                listeners = int(number)
+                                logger.debug(f"Found listeners: {listeners} from text: {match.group(0)}")
+                                break
+                            except (ValueError, AttributeError) as e:
+                                logger.debug(f"Could not parse number: {e}")
+
+                        if listeners:
+                            break
+
+                    # Method 2: Try to find in page state/scripts
+                    if not listeners:
+                        # Search for lastMonthListeners in scripts
+                        scripts = page.query_selector_all('script')
+                        for script in scripts[:20]:  # Check first 20 scripts
+                            try:
+                                content = script.inner_text()
+                                match = re.search(r'"lastMonthListeners"\s*:\s*(\d+)', content)
+                                if match:
+                                    listeners = int(match.group(1))
+                                    logger.debug(f"Found in script: {listeners}")
+                                    break
+                            except:
+                                pass
+
+                except Exception as e:
+                    logger.warning(f"Error extracting listeners: {e}")
+
+                browser.close()
 
             if not artist_name:
-                logger.warning(f"Could not extract artist name from JSON")
+                logger.warning(f"Could not extract artist name, using ID")
                 artist_name = f"Artist_{artist_id}"
 
             if listeners is None:
-                logger.warning(f"Could not extract listener count from JSON")
+                logger.warning(f"Could not extract listener count")
 
             result = {
                 'artist_id': artist_id,
@@ -156,12 +182,13 @@ class YandexMusicParser:
                 'lastMonthListeners': listeners
             }
 
-            logger.info(f"✓ Parsed: {artist_name} (ID: {artist_id}) - {listeners:,} listeners" if listeners else f"✓ Parsed: {artist_name} (ID: {artist_id}) - No listener data")
+            logger.info(
+                f"✓ Parsed: {artist_name} (ID: {artist_id}) - "
+                f"{listeners:,} listeners" if listeners else
+                f"✓ Parsed: {artist_name} (ID: {artist_id}) - No listener data"
+            )
             return result
 
-        except requests.RequestException as e:
-            logger.error(f"Request error for {artist_url}: {e}")
-            return None
         except Exception as e:
             logger.error(f"Error parsing {artist_url}: {e}", exc_info=True)
             return None
@@ -197,13 +224,13 @@ class YandexMusicParser:
             except sqlite3.Error as e:
                 logger.error(f"Database error: {e}")
 
-    def parse_artists(self, artist_urls, delay=2):
+    def parse_artists(self, artist_urls, delay=3):
         """
         Parse multiple artist URLs
 
         Args:
             artist_urls: list of artist URLs
-            delay: seconds to wait between requests (default: 2)
+            delay: seconds to wait between requests (default: 3)
         """
         parse_date = datetime.now().strftime('%Y-%m-%d')
         success_count = 0
@@ -221,8 +248,9 @@ class YandexMusicParser:
             else:
                 fail_count += 1
 
-            # Be polite - add delay between requests
+            # Delay between requests
             if i < len(artist_urls):
+                logger.info(f"Waiting {delay} seconds...")
                 time.sleep(delay)
 
         logger.info(f"\n{'='*50}")
@@ -233,7 +261,10 @@ class YandexMusicParser:
     def export_to_csv(self, output_path='data/artist_stats.csv'):
         """Export all data to CSV"""
         with sqlite3.connect(self.db_path) as conn:
-            df = pd.read_sql_query('SELECT * FROM artist_stats ORDER BY date DESC, artist_name', conn)
+            df = pd.read_sql_query(
+                'SELECT * FROM artist_stats ORDER BY date DESC, artist_name',
+                conn
+            )
             df.to_csv(output_path, index=False, encoding='utf-8')
             logger.info(f"📄 Exported {len(df)} records to {output_path}")
             return df
@@ -273,29 +304,29 @@ class YandexMusicParser:
         latest = history.iloc[-1]
         previous = history.iloc[-2]
 
-        growth = latest['lastMonthListeners'] - previous['lastMonthListeners']
-        growth_pct = (growth / previous['lastMonthListeners'] * 100) if previous['lastMonthListeners'] > 0 else 0
+        if previous['lastMonthListeners'] and latest['lastMonthListeners']:
+            growth = latest['lastMonthListeners'] - previous['lastMonthListeners']
+            growth_pct = (growth / previous['lastMonthListeners'] * 100) if previous['lastMonthListeners'] > 0 else 0
 
-        return {
-            'artist_name': latest['artist_name'],
-            'current_listeners': latest['lastMonthListeners'],
-            'previous_listeners': previous['lastMonthListeners'],
-            'growth': growth,
-            'growth_percent': growth_pct,
-            'latest_date': latest['date'],
-            'previous_date': previous['date']
-        }
+            return {
+                'artist_name': latest['artist_name'],
+                'current_listeners': latest['lastMonthListeners'],
+                'previous_listeners': previous['lastMonthListeners'],
+                'growth': growth,
+                'growth_percent': growth_pct,
+                'latest_date': latest['date'],
+                'previous_date': previous['date']
+            }
+        return None
 
 
 def main():
     """Main execution function"""
-    # Example usage
     parser = YandexMusicParser()
 
-    # List of artists to track
+    # Example artists
     artist_urls = [
         'https://music.yandex.ru/artist/7927866',  # Печень
-        # Add more artist URLs here
     ]
 
     # Parse all artists
@@ -307,7 +338,10 @@ def main():
     # Show latest stats
     print("\n📊 Latest Statistics:")
     stats = parser.get_latest_stats()
-    print(stats.to_string(index=False))
+    if len(stats) > 0:
+        print(stats.to_string(index=False))
+    else:
+        print("No data collected yet")
 
 
 if __name__ == '__main__':
