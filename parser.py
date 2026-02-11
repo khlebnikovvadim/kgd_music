@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Yandex Music Artist Statistics Parser
-Uses Playwright for JavaScript rendering
+Uses Playwright with stealth mode and proxy support
 """
 
 import pandas as pd
@@ -10,6 +10,7 @@ from datetime import datetime
 import time
 import logging
 import re
+import random
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
@@ -22,12 +23,26 @@ logger = logging.getLogger(__name__)
 
 
 class YandexMusicParser:
-    """Parser for Yandex Music artist statistics using Playwright"""
+    """Parser for Yandex Music artist statistics using Playwright with stealth"""
 
-    def __init__(self, db_path='data/artists.db', headless=True):
+    def __init__(self, db_path='data/artists.db', headless=True, proxy=None):
+        """
+        Initialize parser
+
+        Args:
+            db_path: Path to SQLite database
+            headless: Run browser in headless mode (default: True)
+            proxy: Proxy server URL (e.g., 'http://proxy:8080' or 'socks5://proxy:1080')
+        """
         self.db_path = db_path
         self.headless = headless
+        self.proxy = proxy
         self._init_database()
+
+        if self.proxy:
+            logger.info(f"🌐 Using proxy: {self.proxy}")
+        else:
+            logger.warning("⚠️  No proxy configured - may encounter geo-blocking")
 
     def _init_database(self):
         """Initialize SQLite database with schema"""
@@ -51,9 +66,24 @@ class YandexMusicParser:
             conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
 
+    def _random_viewport(self):
+        """Generate random viewport size to appear more human"""
+        widths = [1366, 1920, 1440, 1536, 1280]
+        heights = [768, 1080, 900, 864, 720]
+        return {
+            'width': random.choice(widths),
+            'height': random.choice(heights)
+        }
+
+    def _random_delay(self, min_sec=2, max_sec=5):
+        """Random delay to appear more human"""
+        delay = random.uniform(min_sec, max_sec)
+        logger.debug(f"Waiting {delay:.1f} seconds...")
+        time.sleep(delay)
+
     def parse_artist_page(self, artist_url):
         """
-        Parse artist page using Playwright (with JavaScript rendering)
+        Parse artist page using Playwright with stealth mode
 
         Args:
             artist_url: URL like 'https://music.yandex.ru/artist/7927866'
@@ -72,29 +102,124 @@ class YandexMusicParser:
             logger.info(f"Fetching {artist_url}")
 
             with sync_playwright() as p:
+                # Browser launch args
+                launch_args = {
+                    'headless': self.headless,
+                    'args': [
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-web-security',
+                        '--disable-features=IsolateOrigins,site-per-process',
+                    ]
+                }
+
+                # Add proxy if configured
+                if self.proxy:
+                    # Parse proxy URL to extract components
+                    proxy_config = {'server': self.proxy}
+
+                    # Check if proxy has username:password
+                    if '@' in self.proxy:
+                        # Extract username and password
+                        try:
+                            proto_and_creds = self.proxy.split('://')[1].split('@')[0]
+                            if ':' in proto_and_creds:
+                                username, password = proto_and_creds.split(':', 1)
+                                proxy_config['username'] = username
+                                proxy_config['password'] = password
+                        except:
+                            pass
+
+                    launch_args['proxy'] = proxy_config
+
                 # Launch browser
-                browser = p.chromium.launch(headless=self.headless)
+                browser = p.chromium.launch(**launch_args)
+
+                # Create context with stealth settings
+                viewport = self._random_viewport()
                 context = browser.new_context(
-                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                    locale='ru-RU'
+                    viewport=viewport,
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    locale='ru-RU',
+                    timezone_id='Europe/Moscow',
+                    geolocation={'longitude': 37.6173, 'latitude': 55.7558},  # Moscow
+                    permissions=['geolocation'],
+                    color_scheme='light',
+                    extra_http_headers={
+                        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                    }
                 )
+
                 page = context.new_page()
 
-                # Navigate to page
+                # Add stealth JavaScript to hide automation
+                page.add_init_script("""
+                    // Overwrite the `webdriver` property
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => false,
+                    });
+
+                    // Overwrite the `plugins` property
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5],
+                    });
+
+                    // Overwrite the `languages` property
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['ru-RU', 'ru', 'en-US', 'en'],
+                    });
+
+                    // Pass the Chrome Test
+                    window.chrome = {
+                        runtime: {},
+                    };
+
+                    // Pass the Permissions Test
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
+                """)
+
+                # Navigate to page with random delay before
+                self._random_delay(1, 3)
+
                 try:
-                    page.goto(artist_url, wait_until='networkidle', timeout=30000)
+                    logger.info("Loading page...")
+                    page.goto(artist_url, wait_until='domcontentloaded', timeout=30000)
+
+                    # Wait for page to load with random delay
+                    self._random_delay(3, 6)
+
+                    # Simulate human scrolling
+                    logger.debug("Simulating scroll...")
+                    page.evaluate('window.scrollTo(0, 300)')
+                    self._random_delay(0.5, 1.5)
+                    page.evaluate('window.scrollTo(0, 0)')
+                    self._random_delay(1, 2)
+
                 except PlaywrightTimeout:
                     logger.warning("Page load timeout, continuing anyway...")
 
-                # Wait a bit for JavaScript to execute
-                page.wait_for_timeout(3000)
+                # Wait for content
+                page.wait_for_timeout(2000)
 
                 # Extract artist name
                 artist_name = None
                 try:
-                    # Try different selectors for artist name
+                    # Try different selectors
                     name_selectors = [
                         'h1.page-artist__title',
+                        'h1[class*="Title"]',
                         '[class*="ArtistTitle"]',
                         'h1',
                     ]
@@ -103,7 +228,8 @@ class YandexMusicParser:
                             element = page.query_selector(selector)
                             if element:
                                 artist_name = element.inner_text().strip()
-                                if artist_name:
+                                # Skip error messages
+                                if artist_name and not any(x in artist_name.lower() for x in ['робот', 'region', 'недоступна']):
                                     break
                         except:
                             pass
@@ -113,15 +239,23 @@ class YandexMusicParser:
                 # Extract listeners count
                 listeners = None
                 try:
-                    # Look for text like "5 260 слушателей за месяц" or "5.2 тыс слушателей"
-                    page_text = page.content()
-
-                    # Method 1: Search in visible text
+                    # Get all visible text
                     visible_text = page.inner_text('body')
+
+                    # Check for errors
+                    if 'робот' in visible_text.lower() or 'captcha' in visible_text.lower():
+                        logger.warning("⚠️  CAPTCHA detected on page")
+                        browser.close()
+                        return None
+
+                    if 'недоступна в вашем регионе' in visible_text.lower() or 'not available in your region' in visible_text.lower():
+                        logger.error("❌ Geo-blocking detected - check proxy configuration")
+                        browser.close()
+                        return None
 
                     # Pattern: "X слушателей за месяц" or "X тыс./млн слушателей"
                     patterns = [
-                        r'([\d\s]+)\s*слушател',  # "5 260 слушателей"
+                        r'([\d\s]+)\s*слушател[^\d]*за\s*месяц',  # "5 260 слушателей за месяц"
                         r'([\d,.]+)\s*(тыс|млн)\.?\s*слушател',  # "5.2 тыс слушателей"
                     ]
 
@@ -133,7 +267,7 @@ class YandexMusicParser:
                                 number = float(number_str)
 
                                 # Handle multipliers
-                                if len(match.groups()) > 1:
+                                if len(match.groups()) > 1 and match.group(2):
                                     multiplier = match.group(2)
                                     if multiplier == 'тыс':
                                         number *= 1000
@@ -149,18 +283,18 @@ class YandexMusicParser:
                         if listeners:
                             break
 
-                    # Method 2: Try to find in page state/scripts
+                    # Method 2: Try to find in page scripts
                     if not listeners:
-                        # Search for lastMonthListeners in scripts
                         scripts = page.query_selector_all('script')
-                        for script in scripts[:20]:  # Check first 20 scripts
+                        for script in scripts[:30]:
                             try:
                                 content = script.inner_text()
-                                match = re.search(r'"lastMonthListeners"\s*:\s*(\d+)', content)
-                                if match:
-                                    listeners = int(match.group(1))
-                                    logger.debug(f"Found in script: {listeners}")
-                                    break
+                                if 'lastMonthListeners' in content:
+                                    match = re.search(r'"lastMonthListeners"\s*:\s*(\d+)', content)
+                                    if match:
+                                        listeners = int(match.group(1))
+                                        logger.debug(f"Found in script: {listeners}")
+                                        break
                             except:
                                 pass
 
@@ -224,19 +358,21 @@ class YandexMusicParser:
             except sqlite3.Error as e:
                 logger.error(f"Database error: {e}")
 
-    def parse_artists(self, artist_urls, delay=3):
+    def parse_artists(self, artist_urls, delay_min=5, delay_max=10):
         """
-        Parse multiple artist URLs
+        Parse multiple artist URLs with random delays
 
         Args:
             artist_urls: list of artist URLs
-            delay: seconds to wait between requests (default: 3)
+            delay_min: minimum seconds between requests (default: 5)
+            delay_max: maximum seconds between requests (default: 10)
         """
         parse_date = datetime.now().strftime('%Y-%m-%d')
         success_count = 0
         fail_count = 0
 
         logger.info(f"Starting to parse {len(artist_urls)} artists...")
+        logger.info(f"Using random delays between {delay_min}-{delay_max} seconds")
 
         for i, url in enumerate(artist_urls, 1):
             logger.info(f"\n[{i}/{len(artist_urls)}] Processing: {url}")
@@ -248,9 +384,10 @@ class YandexMusicParser:
             else:
                 fail_count += 1
 
-            # Delay between requests
+            # Random delay between requests
             if i < len(artist_urls):
-                logger.info(f"Waiting {delay} seconds...")
+                delay = random.uniform(delay_min, delay_max)
+                logger.info(f"⏱️  Waiting {delay:.1f} seconds before next request...")
                 time.sleep(delay)
 
         logger.info(f"\n{'='*50}")
@@ -322,7 +459,14 @@ class YandexMusicParser:
 
 def main():
     """Main execution function"""
-    parser = YandexMusicParser()
+    # Try to load config
+    try:
+        from config import PROXY_SERVER, HEADLESS, DELAY_MIN, DELAY_MAX
+        parser = YandexMusicParser(proxy=PROXY_SERVER, headless=HEADLESS)
+    except ImportError:
+        logger.warning("config.py not found, using defaults")
+        parser = YandexMusicParser()
+        DELAY_MIN, DELAY_MAX = 5, 10
 
     # Example artists
     artist_urls = [
@@ -330,7 +474,7 @@ def main():
     ]
 
     # Parse all artists
-    parser.parse_artists(artist_urls)
+    parser.parse_artists(artist_urls, delay_min=DELAY_MIN, delay_max=DELAY_MAX)
 
     # Export to CSV
     parser.export_to_csv()

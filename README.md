@@ -1,14 +1,15 @@
 # KGD Music - Yandex Music Artist Statistics Tracker
 
-Monthly parser for tracking Yandex Music artist listener statistics.
+Monthly parser for tracking Yandex Music artist listener statistics with proxy support.
 
 ## Features
 
-- 📊 Extracts data from Yandex Music JSON (not HTML scraping)
+- 📊 Playwright-based browser automation
+- 🥷 Stealth mode to avoid detection
+- 🌐 **Proxy support** for bypassing geo-blocking
 - 💾 SQLite database for historical tracking
 - 📅 Monthly listener counts
 - 📈 CSV export for analysis
-- 🚀 Reliable JSON-based parsing
 
 ## Quick Start
 
@@ -17,22 +18,73 @@ Monthly parser for tracking Yandex Music artist listener statistics.
 ```bash
 cd ~/kgd_music
 pip install -r requirements.txt
+python3 -m playwright install chromium
 ```
 
-### 2. Add Artists
+### 2. Configure Proxy (Important!)
+
+Yandex Music is geo-blocked outside Russia/CIS. You need a Russian proxy.
+
+Edit `config.py`:
+
+```python
+# Set your Russian proxy
+PROXY_SERVER = 'http://your-proxy-server:8080'
+
+# Or with authentication:
+PROXY_SERVER = 'http://username:password@proxy.example.com:8080'
+
+# SOCKS5 proxy:
+PROXY_SERVER = 'socks5://proxy.example.com:1080'
+```
+
+### 3. Add Artists
 
 Edit `artists.txt`:
 
 ```
 https://music.yandex.ru/artist/7927866
 https://music.yandex.ru/artist/123456
-https://music.yandex.ru/artist/789012
 ```
 
-### 3. Run Parser
+### 4. Run Parser
 
 ```bash
 python run_monthly.py
+```
+
+## Proxy Setup
+
+### Option 1: Free Proxy Lists
+- Find Russian proxies: https://www.proxy-list.download/RUSSIA
+- Test them before using
+
+### Option 2: Paid Proxy Services
+- **Bright Data**: https://brightdata.com (residential IPs)
+- **Smartproxy**: https://smartproxy.com
+- **Proxy6**: https://proxy6.net (Russian provider)
+
+### Option 3: VPN + Local Proxy
+1. Connect to Russian VPN
+2. Set `PROXY_SERVER = None` in config.py
+3. Run parser (will use your VPN IP)
+
+## Configuration (`config.py`)
+
+```python
+# Proxy settings (REQUIRED for non-Russian IPs)
+PROXY_SERVER = 'http://proxy:8080'  # Set your proxy here
+
+# Browser settings
+HEADLESS = True  # False to see browser window
+
+# Delays (seconds between requests)
+DELAY_MIN = 5
+DELAY_MAX = 10
+
+# Paths
+DB_PATH = 'data/artists.db'
+CSV_PATH = 'data/artist_stats.csv'
 ```
 
 ## Output Example
@@ -41,20 +93,14 @@ python run_monthly.py
 ============================================================
 Starting monthly parser run: 2025-02-11 14:30:00
 ============================================================
+🌐 Using proxy: http://proxy.example.com:8080
 📋 Loaded 3 artist URLs from artists.txt
+Starting to parse 3 artists...
 
 [1/3] Processing: https://music.yandex.ru/artist/7927866
-Fetching https://music.yandex.ru/artist/7927866
+Loading page...
 ✓ Parsed: Печень (ID: 7927866) - 5,260 listeners
 💾 Saved stats for Печень on 2025-02-11
-
-...
-
-============================================================
-✓ Successfully parsed: 3
-✗ Failed: 0
-============================================================
-📄 Exported 3 records to data/artist_stats.csv
 
 ============================================================
 📊 SUMMARY - Parsed 3 artists
@@ -62,9 +108,6 @@ Fetching https://music.yandex.ru/artist/7927866
 Печень                         |        5,260 listeners
 Another Artist                 |       15,420 listeners
 Third Artist                   |      102,350 listeners
-
-============================================================
-✓ Completed in 8.3 seconds
 ============================================================
 ```
 
@@ -72,14 +115,13 @@ Third Artist                   |      102,350 listeners
 
 **Location:** `data/artists.db`
 
-**Schema:**
 ```sql
 CREATE TABLE artist_stats (
     id INTEGER PRIMARY KEY,
-    date TEXT NOT NULL,           -- YYYY-MM-DD
-    artist_id TEXT NOT NULL,      -- Yandex artist ID
-    artist_name TEXT NOT NULL,    -- Artist name
-    lastMonthListeners INTEGER,   -- Monthly listeners
+    date TEXT NOT NULL,
+    artist_id TEXT NOT NULL,
+    artist_name TEXT NOT NULL,
+    lastMonthListeners INTEGER,
     UNIQUE(date, artist_id)
 );
 ```
@@ -89,11 +131,11 @@ CREATE TABLE artist_stats (
 ```python
 from parser import YandexMusicParser
 
-parser = YandexMusicParser()
+# With proxy
+parser = YandexMusicParser(proxy='http://proxy:8080')
 
 # Parse one artist
 data = parser.parse_artist_page('https://music.yandex.ru/artist/7927866')
-# Returns: {'artist_id': '7927866', 'artist_name': 'Печень', 'lastMonthListeners': 5260}
 
 # Parse multiple
 urls = ['https://music.yandex.ru/artist/7927866', ...]
@@ -101,14 +143,12 @@ parser.parse_artists(urls)
 
 # Get latest stats
 latest = parser.get_latest_stats()
-print(latest)
 
-# Get artist history
+# Get history
 history = parser.get_artist_history('7927866')
 
 # Calculate growth
 growth = parser.get_growth_stats('7927866')
-print(f"Growth: {growth['growth_percent']:.1f}%")
 ```
 
 ## Monthly Automation
@@ -135,53 +175,42 @@ Add:
    - Arguments: `run_monthly.py`
    - Start in: `C:\Users\YourName\kgd_music`
 
-## Files
+## Troubleshooting
 
-```
-kgd_music/
-├── parser.py           # Main parser class
-├── run_monthly.py      # Monthly execution script
-├── artists.txt         # Artist URLs to track
-├── requirements.txt    # Dependencies
-├── data/
-│   ├── artists.db      # SQLite database
-│   ├── artist_stats.csv# CSV export
-│   └── parser.log      # Execution logs
-└── README.md
-```
+### Issue: "Geo-blocking detected"
+**Solution**: Configure a Russian proxy in `config.py`
+
+### Issue: "CAPTCHA detected"
+**Solution**:
+- Increase delays (DELAY_MIN/MAX in config.py)
+- Use residential proxy (not datacenter)
+- Run less frequently
+
+### Issue: Proxy not working
+**Solution**:
+- Test proxy: `curl --proxy http://proxy:8080 https://music.yandex.ru`
+- Try different proxy
+- Check proxy authentication
+
+### Issue: Slow parsing
+**Solution**: Normal - stealth mode adds delays to appear human
 
 ## How It Works
 
-1. **Fetches page**: Gets artist page HTML
-2. **Extracts JSON**: Finds embedded JSON data (`Mu.pages.artist = {...}`)
-3. **Parses structure**:
-   ```json
-   {
-     "artist": {
-       "meta": {
-         "artist": {"id": "7927866", "name": "Печень"},
-         "lastMonthListeners": 5260
-       }
-     }
-   }
-   ```
-4. **Saves to DB**: Stores with date + artist info
-5. **Exports CSV**: Creates CSV for easy analysis
+1. **Launches Chromium** with stealth settings
+2. **Connects via proxy** (if configured)
+3. **Navigates to artist page**
+4. **Waits for JavaScript** to render content
+5. **Simulates human behavior** (scrolling, delays)
+6. **Extracts listener count** from text "X слушателей за месяц"
+7. **Saves to database**
 
-## Troubleshooting
+## Security Notes
 
-**No data extracted**
-- Yandex may have changed their JSON structure
-- Check `data/parser.log` for details
-- Update regex patterns in `_extract_json_data()`
-
-**Request errors**
-- Check internet connection
-- Yandex may be rate limiting - increase delay in `parse_artists()`
-
-**Database locked**
-- Close any programs accessing `data/artists.db`
-- SQLite allows one writer at a time
+- Never commit `config.py` with proxy credentials to git
+- Use environment variables for sensitive data
+- Rotate proxies if parsing many artists
+- Respect Yandex's terms of service
 
 ## License
 

@@ -8,6 +8,16 @@ from parser import YandexMusicParser
 import logging
 from datetime import datetime
 
+# Try to load config
+try:
+    from config import PROXY_SERVER, HEADLESS, DELAY_MIN, DELAY_MAX, DB_PATH, CSV_PATH
+except ImportError:
+    PROXY_SERVER = None
+    HEADLESS = True
+    DELAY_MIN, DELAY_MAX = 5, 10
+    DB_PATH = 'data/artists.db'
+    CSV_PATH = 'data/artist_stats.csv'
+
 # Setup logging to both file and console
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +48,8 @@ def main():
     logging.info(f"Starting monthly parser run: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info(f"{'='*60}")
 
-    parser = YandexMusicParser()
+    # Initialize parser with proxy
+    parser = YandexMusicParser(db_path=DB_PATH, headless=HEADLESS, proxy=PROXY_SERVER)
 
     # Load artist URLs
     artist_urls = load_artist_urls()
@@ -50,10 +61,10 @@ def main():
     logging.info(f"📋 Loaded {len(artist_urls)} artist URLs from artists.txt")
 
     # Parse all artists
-    parser.parse_artists(artist_urls)
+    parser.parse_artists(artist_urls, delay_min=DELAY_MIN, delay_max=DELAY_MAX)
 
     # Export to CSV
-    df = parser.export_to_csv()
+    df = parser.export_to_csv(CSV_PATH)
 
     # Show summary
     stats = parser.get_latest_stats()
@@ -64,6 +75,7 @@ def main():
 
     if len(stats) > 0:
         # Display with formatting
+        import pandas as pd
         for idx, row in stats.iterrows():
             listeners = f"{row['lastMonthListeners']:,}" if pd.notna(row['lastMonthListeners']) else "N/A"
             print(f"{row['artist_name']:30} | {listeners:>12} listeners")
