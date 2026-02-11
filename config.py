@@ -2,15 +2,15 @@
 Configuration file for Yandex Music Parser
 """
 
-# Proxy settings (set to None if not using proxy)
-# Format: 'http://username:password@host:port' or 'http://host:port'
-PROXY_SERVER = None  # Example: 'http://proxy.example.com:8080'
+# Proxy settings
+# Set to None if running from Russia (no proxy needed!)
+# Only needed if running from outside Russia/CIS
+PROXY_SERVER = None
 
-# Proxy with authentication example:
-# PROXY_SERVER = 'http://user:pass@proxy.example.com:8080'
-
-# For SOCKS5 proxy:
-# PROXY_SERVER = 'socks5://proxy.example.com:1080'
+# Examples (only if you need proxy):
+# PROXY_SERVER = 'http://proxy.example.com:8080'
+# PROXY_SERVER = 'http://user:pass@proxy.example.com:8080'  # with auth
+# PROXY_SERVER = 'socks5://proxy.example.com:1080'  # SOCKS5
 
 # Browser settings
 HEADLESS = True  # Run browser in background (no window)

@@ -1,12 +1,12 @@
 # KGD Music - Yandex Music Artist Statistics Tracker
 
-Monthly parser for tracking Yandex Music artist listener statistics with proxy support.
+Monthly parser for tracking Yandex Music artist listener statistics.
 
 ## Features
 
 - 📊 Playwright-based browser automation
 - 🥷 Stealth mode to avoid detection
-- 🌐 **Proxy support** for bypassing geo-blocking
+- 🌐 Proxy support (optional, only for non-Russian IPs)
 - 💾 SQLite database for historical tracking
 - 📅 Monthly listener counts
 - 📈 CSV export for analysis
@@ -21,24 +21,7 @@ pip install -r requirements.txt
 python3 -m playwright install chromium
 ```
 
-### 2. Configure Proxy (Important!)
-
-Yandex Music is geo-blocked outside Russia/CIS. You need a Russian proxy.
-
-Edit `config.py`:
-
-```python
-# Set your Russian proxy
-PROXY_SERVER = 'http://your-proxy-server:8080'
-
-# Or with authentication:
-PROXY_SERVER = 'http://username:password@proxy.example.com:8080'
-
-# SOCKS5 proxy:
-PROXY_SERVER = 'socks5://proxy.example.com:1080'
-```
-
-### 3. Add Artists
+### 2. Add Artists
 
 Edit `artists.txt`:
 
@@ -47,45 +30,39 @@ https://music.yandex.ru/artist/7927866
 https://music.yandex.ru/artist/123456
 ```
 
-### 4. Run Parser
+### 3. Run Parser
 
 ```bash
-python run_monthly.py
+python3 run_monthly.py
 ```
 
-## Proxy Setup
+**That's it!** If you're in Russia, no proxy configuration needed.
 
-### Option 1: Free Proxy Lists
-- Find Russian proxies: https://www.proxy-list.download/RUSSIA
-- Test them before using
+## Configuration
 
-### Option 2: Paid Proxy Services
-- **Bright Data**: https://brightdata.com (residential IPs)
-- **Smartproxy**: https://smartproxy.com
-- **Proxy6**: https://proxy6.net (Russian provider)
+### Running from Russia 🇷🇺
 
-### Option 3: VPN + Local Proxy
-1. Connect to Russian VPN
-2. Set `PROXY_SERVER = None` in config.py
-3. Run parser (will use your VPN IP)
+No configuration needed! Just run:
 
-## Configuration (`config.py`)
+```bash
+python3 run_monthly.py
+```
+
+The default `config.py` has `PROXY_SERVER = None` which works perfectly in Russia.
+
+### Running from Outside Russia 🌍
+
+You need a Russian proxy. Edit `config.py`:
 
 ```python
-# Proxy settings (REQUIRED for non-Russian IPs)
-PROXY_SERVER = 'http://proxy:8080'  # Set your proxy here
-
-# Browser settings
-HEADLESS = True  # False to see browser window
-
-# Delays (seconds between requests)
-DELAY_MIN = 5
-DELAY_MAX = 10
-
-# Paths
-DB_PATH = 'data/artists.db'
-CSV_PATH = 'data/artist_stats.csv'
+# Set your Russian proxy
+PROXY_SERVER = 'http://your-proxy-server:8080'
 ```
+
+**Proxy options:**
+- **Russian VPS** ($2-5/month) - Best option, no proxy needed
+- **Paid proxy** ($1-5/month) - [Proxy6.net](https://proxy6.net), [Smartproxy](https://smartproxy.com)
+- **VPN** - Connect to Russian server, keep `PROXY_SERVER = None`
 
 ## Output Example
 
@@ -93,7 +70,6 @@ CSV_PATH = 'data/artist_stats.csv'
 ============================================================
 Starting monthly parser run: 2025-02-11 14:30:00
 ============================================================
-🌐 Using proxy: http://proxy.example.com:8080
 📋 Loaded 3 artist URLs from artists.txt
 Starting to parse 3 artists...
 
@@ -131,7 +107,10 @@ CREATE TABLE artist_stats (
 ```python
 from parser import YandexMusicParser
 
-# With proxy
+# Default (no proxy)
+parser = YandexMusicParser()
+
+# With proxy (if needed)
 parser = YandexMusicParser(proxy='http://proxy:8080')
 
 # Parse one artist
@@ -153,7 +132,7 @@ growth = parser.get_growth_stats('7927866')
 
 ## Monthly Automation
 
-### macOS/Linux (Cron)
+### Linux/macOS (Cron)
 
 ```bash
 crontab -e
@@ -161,7 +140,7 @@ crontab -e
 
 Add:
 ```
-# Run on 1st of every month at 9 AM
+# Run on 1st of every month at 9 AM Moscow time
 0 9 1 * * cd ~/kgd_music && /usr/bin/python3 run_monthly.py
 ```
 
@@ -173,27 +152,62 @@ Add:
 4. Action: Start Program
    - Program: `python`
    - Arguments: `run_monthly.py`
-   - Start in: `C:\Users\YourName\kgd_music`
+   - Start in: `C:\path\to\kgd_music`
+
+## Configuration Options (`config.py`)
+
+```python
+# Proxy (only if outside Russia)
+PROXY_SERVER = None
+
+# Browser settings
+HEADLESS = True  # False to see browser window
+
+# Delays (seconds between requests)
+DELAY_MIN = 5
+DELAY_MAX = 10
+
+# Paths
+DB_PATH = 'data/artists.db'
+CSV_PATH = 'data/artist_stats.csv'
+```
 
 ## Troubleshooting
 
 ### Issue: "Geo-blocking detected"
-**Solution**: Configure a Russian proxy in `config.py`
+**Solution**: You're not in Russia. Either:
+- Use Russian VPS ($2-5/month)
+- Configure proxy in `config.py`
+- Use VPN
 
 ### Issue: "CAPTCHA detected"
 **Solution**:
-- Increase delays (DELAY_MIN/MAX in config.py)
-- Use residential proxy (not datacenter)
+- Increase delays (`DELAY_MIN`, `DELAY_MAX` in config.py)
 - Run less frequently
+- Use residential proxy (not datacenter)
 
 ### Issue: Proxy not working
 **Solution**:
 - Test proxy: `curl --proxy http://proxy:8080 https://music.yandex.ru`
 - Try different proxy
-- Check proxy authentication
+- Or use Russian VPS (no proxy needed)
 
-### Issue: Slow parsing
-**Solution**: Normal - stealth mode adds delays to appear human
+## Files Structure
+
+```
+kgd_music/
+├── config.py          # Configuration (proxy, delays, etc.)
+├── parser.py          # Main parser with stealth mode
+├── run_monthly.py     # Monthly execution script
+├── artists.txt        # List of artist URLs to track
+├── test_proxy.py      # Test proxy connectivity
+├── requirements.txt   # Python dependencies
+├── README.md          # This file
+└── data/
+    ├── artists.db     # SQLite database
+    ├── artist_stats.csv # CSV export
+    └── parser.log     # Execution logs
+```
 
 ## How It Works
 
@@ -205,13 +219,31 @@ Add:
 6. **Extracts listener count** from text "X слушателей за месяц"
 7. **Saves to database**
 
-## Security Notes
+## For Non-Russian Users
 
-- Never commit `config.py` with proxy credentials to git
-- Use environment variables for sensitive data
-- Rotate proxies if parsing many artists
-- Respect Yandex's terms of service
+If you're outside Russia, you have 3 options:
+
+**Option 1: Russian VPS** (Recommended - $2-5/month)
+- [Timeweb](https://timeweb.com) - 200-500₽/month
+- [Yandex Cloud](https://cloud.yandex.ru) - Yandex's own cloud
+- [Selectel](https://selectel.ru) - Russian hosting
+- No proxy needed, always works!
+
+**Option 2: Paid Proxy** ($1-5/month)
+- [Proxy6.net](https://proxy6.net) - Russian proxy provider
+- Configure in `config.py`
+
+**Option 3: VPN**
+- Connect to Russian VPN server
+- Keep `PROXY_SERVER = None`
 
 ## License
 
 MIT
+
+## Support
+
+For issues or questions:
+- Check logs in `data/parser.log`
+- Run `python3 test_proxy.py` to test proxy
+- See troubleshooting section above
