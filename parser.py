@@ -56,9 +56,33 @@ class YandexMusicParser:
                     artist_id TEXT NOT NULL,
                     artist_name TEXT NOT NULL,
                     lastMonthListeners INTEGER,
+                    genre TEXT,
+                    track1_name TEXT,
+                    track1_year INTEGER,
+                    track2_name TEXT,
+                    track2_year INTEGER,
+                    track3_name TEXT,
+                    track3_year INTEGER,
+                    total_album_likes INTEGER,
+                    playlists_count INTEGER,
+                    playlists_names TEXT,
+                    playlists_total_likes INTEGER,
                     UNIQUE(date, artist_id)
                 )
             ''')
+            # Add new columns if they don't exist (for existing databases)
+            for col, col_type in [('genre', 'TEXT'),
+                                   ('track1_name', 'TEXT'), ('track1_year', 'INTEGER'),
+                                   ('track2_name', 'TEXT'), ('track2_year', 'INTEGER'),
+                                   ('track3_name', 'TEXT'), ('track3_year', 'INTEGER'),
+                                   ('total_album_likes', 'INTEGER'),
+                                   ('playlists_count', 'INTEGER'),
+                                   ('playlists_names', 'TEXT'),
+                                   ('playlists_total_likes', 'INTEGER')]:
+                try:
+                    conn.execute(f'ALTER TABLE artist_stats ADD COLUMN {col} {col_type}')
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
             conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_artist_date
                 ON artist_stats(artist_id, date)
@@ -80,6 +104,187 @@ class YandexMusicParser:
         delay = random.uniform(min_sec, max_sec)
         logger.debug(f"Waiting {delay:.1f} seconds...")
         time.sleep(delay)
+
+    def _extract_popular_tracks(self, page, context):
+        """
+        Extract first 3 popular tracks with their release years and genre from first album
+
+        Returns:
+            tuple: (tracks list, genre string)
+            tracks: [{'name': 'Track Name', 'year': 2022}, ...]
+        """
+        tracks = []
+        genre = None
+        try:
+            # Find track links on artist page
+            track_elements = page.query_selector_all('a[href*="/album/"][href*="/track/"]')
+            logger.debug(f"Found {len(track_elements)} track links")
+
+            for i, track_el in enumerate(track_elements[:3]):  # First 3 tracks
+                try:
+                    track_name = track_el.inner_text().strip()
+                    href = track_el.get_attribute('href')
+
+                    if not href or not track_name:
+                        continue
+
+                    # Extract album ID from href like /album/23249156/track/105006954
+                    album_match = re.search(r'/album/(\d+)', href)
+                    if not album_match:
+                        tracks.append({'name': track_name, 'year': None})
+                        continue
+
+                    album_id = album_match.group(1)
+                    album_url = f"https://music.yandex.ru/album/{album_id}"
+
+                    # Open album page in new tab to get release year
+                    album_page = context.new_page()
+                    try:
+                        album_page.goto(album_url, wait_until='domcontentloaded', timeout=15000)
+                        self._random_delay(1, 2)
+
+                        # Get album page text and HTML
+                        album_text = album_page.inner_text('body')
+                        album_html = album_page.content()
+
+                        # Extract year: artist name followed by year like "Печень2022"
+                        year = None
+                        year_match = re.search(r'[а-яА-Яa-zA-Z](20[12]\d)\n', album_text[:400])
+                        if year_match:
+                            year = int(year_match.group(1))
+                        else:
+                            year_match = re.search(r'\b(20[12]\d)\b', album_text[:300])
+                            if year_match:
+                                year = int(year_match.group(1))
+
+                        # Extract genre from first album only
+                        if i == 0 and genre is None:
+                            genre_match = re.search(r'"genre"\s*:\s*"([^"]+)"', album_html)
+                            if genre_match:
+                                genre = genre_match.group(1)
+                                logger.debug(f"Found genre: {genre}")
+
+                        tracks.append({'name': track_name, 'year': year})
+                        logger.debug(f"Track: {track_name} -> Year: {year}")
+
+                    except Exception as e:
+                        logger.debug(f"Could not get album info for {track_name}: {e}")
+                        tracks.append({'name': track_name, 'year': None})
+                    finally:
+                        album_page.close()
+
+                except Exception as e:
+                    logger.debug(f"Error extracting track: {e}")
+                    continue
+
+        except Exception as e:
+            logger.warning(f"Error extracting popular tracks: {e}")
+
+        return tracks, genre
+
+    def _get_total_album_likes(self, page, context):
+        """
+        Calculate total likes across all artist's albums
+
+        Returns:
+            int: Sum of likes from all albums
+        """
+        total_likes = 0
+        try:
+            # Get all unique album IDs from artist page
+            album_links = page.query_selector_all('a[href*="/album/"]')
+            album_ids = set()
+            for link in album_links:
+                href = link.get_attribute('href')
+                match = re.search(r'/album/(\d+)(?:/|$)', href)
+                if match:
+                    album_ids.add(match.group(1))
+
+            logger.debug(f"Found {len(album_ids)} unique albums")
+
+            # Visit each album page to get likes
+            for album_id in album_ids:
+                album_url = f"https://music.yandex.ru/album/{album_id}"
+                album_page = context.new_page()
+                try:
+                    album_page.goto(album_url, wait_until='domcontentloaded', timeout=10000)
+                    self._random_delay(0.5, 1)
+                    album_html = album_page.content()
+                    likes_match = re.search(r'"likesCount"\s*:\s*(\d+)', album_html)
+                    if likes_match:
+                        likes = int(likes_match.group(1))
+                        total_likes += likes
+                        logger.debug(f"Album {album_id}: {likes} likes")
+                except Exception as e:
+                    logger.debug(f"Could not get likes for album {album_id}: {e}")
+                finally:
+                    album_page.close()
+
+        except Exception as e:
+            logger.warning(f"Error getting total album likes: {e}")
+
+        return total_likes
+
+    def _get_playlist_data(self, artist_id, artist_name, context):
+        """
+        Get playlist data from band.link scanner
+
+        Returns:
+            dict: {'count': int, 'names': list, 'total_likes': int}
+        """
+        result = {'count': 0, 'names': [], 'total_likes': 0}
+        try:
+            url = f"https://band.link/scanner?search={artist_id}&type=artist_id&service=yandex_music"
+            page = context.new_page()
+            try:
+                page.goto(url, wait_until='domcontentloaded', timeout=15000)
+                self._random_delay(3, 5)  # Wait for JS to load
+
+                text = page.inner_text('body')
+
+                # Find section after "Статистика слушателей и лайков"
+                if 'Статистика слушателей и лайков' in text:
+                    data_section = text.split('Статистика слушателей и лайков')[1]
+                    lines = [l.strip() for l in data_section.split('\n') if l.strip()]
+
+                    # Parse playlists: pattern repeats every 4 lines
+                    # [0] Playlist name, [1] Track info, [2] Likes (28K), [3] "Яндекс Музыка"
+                    i = 0
+                    while i < len(lines) - 2:
+                        playlist_name = lines[i]
+                        # Skip if it looks like a service name or header
+                        if playlist_name in ['Яндекс Музыка', 'КИОН Музыка', '']:
+                            i += 1
+                            continue
+
+                        # Look for likes count (format: 28K, 11K, 1.5M, etc.)
+                        likes_line = lines[i + 2] if i + 2 < len(lines) else ''
+                        match = re.match(r'^(\d+(?:[.,]\d+)?)\s*([KkКк])?$', likes_line)
+                        if match:
+                            num = float(match.group(1).replace(',', '.'))
+                            suffix = match.group(2)
+                            if suffix and suffix.upper() in ['K', 'К']:
+                                num *= 1000
+                            likes = int(num)
+
+                            result['names'].append(playlist_name)
+                            result['total_likes'] += likes
+                            i += 4  # Move to next playlist block
+                        else:
+                            i += 1
+
+                    result['count'] = len(result['names'])
+                    logger.debug(f"Found {result['count']} playlists: {result['names']}")
+
+            except Exception as e:
+                logger.debug(f"Could not get playlist data: {e}")
+            finally:
+                page.close()
+
+        except Exception as e:
+            logger.warning(f"Error getting playlist data: {e}")
+
+        return result
 
     def parse_artist_page(self, artist_url):
         """
@@ -302,6 +507,18 @@ class YandexMusicParser:
                 except Exception as e:
                     logger.warning(f"Error extracting listeners: {e}")
 
+                # Extract popular tracks with release years and genre
+                popular_tracks, genre = self._extract_popular_tracks(page, context)
+                logger.info(f"Extracted {len(popular_tracks)} popular tracks, genre: {genre}")
+
+                # Get total album likes
+                total_album_likes = self._get_total_album_likes(page, context)
+                logger.info(f"Total album likes: {total_album_likes}")
+
+                # Get playlist data from band.link
+                playlist_data = self._get_playlist_data(artist_id, artist_name, context)
+                logger.info(f"Playlists: {playlist_data['count']} ({playlist_data['total_likes']} likes)")
+
                 browser.close()
 
             if not artist_name:
@@ -314,13 +531,23 @@ class YandexMusicParser:
             result = {
                 'artist_id': artist_id,
                 'artist_name': artist_name,
-                'lastMonthListeners': listeners
+                'lastMonthListeners': listeners,
+                'genre': genre,
+                'popular_tracks': popular_tracks,
+                'total_album_likes': total_album_likes,
+                'playlists_count': playlist_data['count'],
+                'playlists_names': playlist_data['names'],
+                'playlists_total_likes': playlist_data['total_likes']
             }
 
+            # Log result
+            tracks_info = ", ".join([f"{t['name']} ({t['year']})" for t in popular_tracks]) if popular_tracks else "none"
             logger.info(
                 f"✓ Parsed: {artist_name} (ID: {artist_id}) - "
-                f"{listeners:,} listeners" if listeners else
-                f"✓ Parsed: {artist_name} (ID: {artist_id}) - No listener data"
+                f"{listeners:,} listeners - {genre or 'unknown'} - {total_album_likes} album likes - "
+                f"{playlist_data['count']} playlists ({playlist_data['total_likes']} likes)" if listeners else
+                f"✓ Parsed: {artist_name} (ID: {artist_id}) - No listener data - {genre or 'unknown'} - "
+                f"{total_album_likes} album likes - {playlist_data['count']} playlists"
             )
             return result
 
@@ -333,7 +560,7 @@ class YandexMusicParser:
         Save artist statistics to database
 
         Args:
-            artist_data: dict with artist_id, artist_name, lastMonthListeners
+            artist_data: dict with artist_id, artist_name, lastMonthListeners, popular_tracks
             parse_date: date string (YYYY-MM-DD), defaults to today
         """
         if not artist_data:
@@ -342,17 +569,42 @@ class YandexMusicParser:
         if parse_date is None:
             parse_date = datetime.now().strftime('%Y-%m-%d')
 
+        # Extract track data
+        tracks = artist_data.get('popular_tracks', [])
+        track1_name = tracks[0]['name'] if len(tracks) > 0 else None
+        track1_year = tracks[0]['year'] if len(tracks) > 0 else None
+        track2_name = tracks[1]['name'] if len(tracks) > 1 else None
+        track2_year = tracks[1]['year'] if len(tracks) > 1 else None
+        track3_name = tracks[2]['name'] if len(tracks) > 2 else None
+        track3_year = tracks[2]['year'] if len(tracks) > 2 else None
+        genre = artist_data.get('genre')
+        total_album_likes = artist_data.get('total_album_likes', 0)
+
+        # Extract playlist data
+        playlists_count = artist_data.get('playlists_count', 0)
+        playlists_names = ', '.join(artist_data.get('playlists_names', []))
+        playlists_total_likes = artist_data.get('playlists_total_likes', 0)
+
         with sqlite3.connect(self.db_path) as conn:
             try:
                 conn.execute('''
                     INSERT OR REPLACE INTO artist_stats
-                    (date, artist_id, artist_name, lastMonthListeners)
-                    VALUES (?, ?, ?, ?)
+                    (date, artist_id, artist_name, lastMonthListeners, genre,
+                     track1_name, track1_year, track2_name, track2_year,
+                     track3_name, track3_year, total_album_likes,
+                     playlists_count, playlists_names, playlists_total_likes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     parse_date,
                     artist_data['artist_id'],
                     artist_data['artist_name'],
-                    artist_data['lastMonthListeners']
+                    artist_data['lastMonthListeners'],
+                    genre,
+                    track1_name, track1_year,
+                    track2_name, track2_year,
+                    track3_name, track3_year,
+                    total_album_likes,
+                    playlists_count, playlists_names, playlists_total_likes
                 ))
                 conn.commit()
                 logger.info(f"💾 Saved stats for {artist_data['artist_name']} on {parse_date}")
@@ -458,6 +710,21 @@ class YandexMusicParser:
         return None
 
 
+def load_artists_from_file(filepath='artists.txt'):
+    """Load artist URLs from file"""
+    artist_urls = []
+    try:
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                # Skip comments and empty lines
+                if line and not line.startswith('#'):
+                    artist_urls.append(line)
+    except FileNotFoundError:
+        logger.error(f"File not found: {filepath}")
+    return artist_urls
+
+
 def main():
     """Main execution function"""
     # Try to load config
@@ -469,10 +736,13 @@ def main():
         parser = YandexMusicParser()
         DELAY_MIN, DELAY_MAX = 5, 10
 
-    # Example artists
-    artist_urls = [
-        'https://music.yandex.ru/artist/7927866',  # Печень
-    ]
+    # Load artists from file
+    artist_urls = load_artists_from_file('artists.txt')
+    if not artist_urls:
+        logger.error("No artists found in artists.txt")
+        return
+
+    logger.info(f"Loaded {len(artist_urls)} artists from artists.txt")
 
     # Parse all artists
     parser.parse_artists(artist_urls, delay_min=DELAY_MIN, delay_max=DELAY_MAX)
