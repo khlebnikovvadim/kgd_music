@@ -13,11 +13,11 @@ PROXY_SERVER = None
 # PROXY_SERVER = 'socks5://proxy.example.com:1080'  # SOCKS5
 
 # Browser settings
-HEADLESS = True  # Run browser in background (no window)
+HEADLESS = False  # Run browser in headful mode (better for avoiding detection, window auto-minimizes)
 
 # Delay settings (seconds between requests)
-DELAY_MIN = 5
-DELAY_MAX = 10
+DELAY_MIN = 15
+DELAY_MAX = 25
 
 # Database path
 DB_PATH = 'data/artists.db'

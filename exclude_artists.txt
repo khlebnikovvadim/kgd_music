@@ -1,0 +1,5 @@
+# Artist IDs to exclude from top-30 rankings
+# One ID per line
+1198423  # Kof
+6149923  # VIKAMA
+13648267  # ronnie!
