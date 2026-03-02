@@ -46,7 +46,7 @@ df_filtered = df[df['artist_id'].isin(tracked_artists) & ~df['artist_id'].isin(e
 print(f"Filtered to {len(df_filtered)} artists (after exclusions)")
 
 # Sort by listeners (descending) and take top 30
-top30 = df_filtered.nlargest(30, 'lastMonthListeners')[['artist_name', 'lastMonthListeners', 'genre', 'date']]
+top30 = df_filtered.nlargest(30, 'lastMonthListeners')[['artist_id', 'artist_name', 'lastMonthListeners', 'genre', 'date']]
 
 # Reset index and add rank
 top30 = top30.reset_index(drop=True)
@@ -62,12 +62,28 @@ text_output = 'data/top30_artists.txt'
 with open(text_output, 'w', encoding='utf-8') as f:
     f.write("="*70 + "\n")
     f.write("TOP-30 ARTISTS BY LISTENER COUNT\n")
-    f.write(f"Data from: {df['date'].iloc[0]}\n")
+    f.write(f"Data from: {latest_date}\n")
     f.write("="*70 + "\n\n")
 
     for idx, row in top30.iterrows():
         listeners = f"{int(row['lastMonthListeners']):,}" if pd.notna(row['lastMonthListeners']) else "N/A"
         f.write(f"{idx:2d}. {row['artist_name']:30s} | {listeners:>12s} listeners | {row['genre']}\n")
+
+# Create markdown version with hyperlinks for Anytype
+md_output = 'data/top30_artists.md'
+with open(md_output, 'w', encoding='utf-8') as f:
+    f.write("| Место | Проект | Слушателей за предыдущий месяц | Жанр |\n")
+    f.write("|-------|--------|-------------------------------|------|\n")
+
+    for idx, row in top30.iterrows():
+        artist_id = int(row['artist_id'])
+        artist_name = row['artist_name']
+        listeners = f"{int(row['lastMonthListeners']):,}".replace(',', ' ') if pd.notna(row['lastMonthListeners']) else "N/A"
+        genre = row['genre']
+        link = f"https://music.yandex.ru/artist/{artist_id}"
+        f.write(f"| {idx} | [{artist_name}]({link}) | {listeners} | {genre} |\n")
+
+print(f"✓ Saved to: {md_output}")
 
 # Display results
 print("="*70)
